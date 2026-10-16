@@ -1,0 +1,291 @@
+import express from "express";
+import fs from "fs";
+import path from "path";
+import { makeCss } from "mark-applier";
+import { markdownToHtmlWithLineNumbers } from "./render.js";
+
+const args = process.argv.slice(2);
+if (args.length < 2) {
+  console.error("Usage: node src/server.js <input.md> <comments-output.md>");
+  process.exit(1);
+}
+
+const inputFile = path.resolve(args[0]);
+const outputFile = path.resolve(args[1]);
+const port = parseInt(args[2] || "3000", 10);
+
+if (!fs.existsSync(inputFile)) {
+  console.error(`Input file not found: ${inputFile}`);
+  process.exit(1);
+}
+
+let comments = [];
+if (fs.existsSync(outputFile)) {
+  try {
+    const raw = fs.readFileSync(outputFile, "utf-8");
+    const parsed = parseCommentsFile(raw);
+    if (parsed.length > 0) {
+      comments = parsed;
+    }
+  } catch {
+    // start fresh if the file can't be parsed
+  }
+}
+
+function parseCommentsFile(text) {
+  const results = [];
+  const blocks = text.split(/^---$/m);
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+    const idMatch = trimmed.match(/^<!-- id: (.+) -->$/m);
+    if (!idMatch) continue;
+
+    const data = JSON.parse(
+      Buffer.from(idMatch[1], "base64").toString("utf-8"),
+    );
+
+    let comment;
+    const commentMarker = trimmed.indexOf("\nComment:\n");
+    if (commentMarker !== -1) {
+      comment = trimmed.slice(commentMarker + "\nComment:\n".length).trim();
+    } else {
+      // Legacy blockquote format
+      const commentLines = [];
+      let pastQuote = false;
+      for (const line of trimmed.split("\n")) {
+        if (line.startsWith("<!-- id:")) continue;
+        if (!pastQuote && line.startsWith("> ")) {
+          pastQuote = true;
+          continue;
+        }
+        if (pastQuote) {
+          commentLines.push(line);
+        }
+      }
+      comment = commentLines.join("\n").trim();
+    }
+
+    results.push({
+      id: data.id,
+      selectedText: data.selectedText,
+      sourceLine: data.sourceLine ?? null,
+      startPath: data.startPath,
+      startOffset: data.startOffset,
+      endPath: data.endPath,
+      endOffset: data.endOffset,
+      comment,
+    });
+  }
+  return results;
+}
+
+function writeCommentsFile() {
+  const sections = comments.map((c) => {
+    const data = Buffer.from(
+      JSON.stringify({
+        id: c.id,
+        selectedText: c.selectedText,
+        sourceLine: c.sourceLine,
+        startPath: c.startPath,
+        startOffset: c.startOffset,
+        endPath: c.endPath,
+        endOffset: c.endOffset,
+      }),
+    ).toString("base64");
+    const lineLabel = c.sourceLine != null ? `\n\n# Line ${c.sourceLine}:` : "";
+    return `<!-- id: ${data} -->${lineLabel}\n\n## Selected Content:\n${c.selectedText}\n\n## Comment:\n${c.comment}`;
+  });
+  fs.writeFileSync(outputFile, sections.join("\n\n---\n\n") + "\n");
+}
+
+const app = express();
+app.use(express.json());
+
+app.get("/", async (_req, res) => {
+  const markdown = fs.readFileSync(inputFile, "utf-8");
+  const rawHtml = await markdownToHtmlWithLineNumbers(markdown);
+  const css = makeCss("auto");
+  const clientJs = fs.readFileSync(
+    path.join(import.meta.dirname, "client.js"),
+    "utf-8",
+  );
+
+  res.type("html").send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Markdown Commenter</title>
+  <style>${css}</style>
+  <style>
+    .comment-highlight {
+      background: rgba(255, 212, 0, 0.3);
+      cursor: pointer;
+      border-radius: 2px;
+    }
+    .comment-highlight:hover {
+      background: rgba(255, 212, 0, 0.5);
+    }
+    .comment-sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 350px;
+      height: 100%;
+      background: #fff;
+      border-left: 1px solid #ddd;
+      overflow-y: auto;
+      padding: 16px;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      z-index: 1000;
+    }
+    @media (prefers-color-scheme: dark) {
+      .comment-sidebar {
+        background: #1c1c1c;
+        border-left-color: #444;
+        color: #e0e0e0;
+      }
+    }
+    .comment-sidebar h3 {
+      margin-top: 0;
+      font-size: 16px;
+    }
+    .comment-card {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+    @media (prefers-color-scheme: dark) {
+      .comment-card {
+        border-color: #444;
+      }
+    }
+    .comment-card .quoted-text {
+      font-style: italic;
+      color: #666;
+      border-left: 3px solid #ddd;
+      padding-left: 8px;
+      margin-bottom: 6px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .comment-card .quoted-text {
+        color: #999;
+        border-left-color: #555;
+      }
+    }
+    .comment-card .comment-body {
+      white-space: pre-wrap;
+    }
+    .comment-card .delete-btn {
+      float: right;
+      cursor: pointer;
+      color: #999;
+      border: none;
+      background: none;
+      font-size: 16px;
+      padding: 0;
+      line-height: 1;
+    }
+    .comment-card .delete-btn:hover {
+      color: #d00;
+    }
+    .comment-form {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .comment-form {
+        border-color: #444;
+      }
+    }
+    .comment-form textarea {
+      width: 100%;
+      min-height: 60px;
+      box-sizing: border-box;
+      margin-bottom: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 6px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .comment-form textarea {
+        background: #2a2a2a;
+        color: #e0e0e0;
+        border-color: #555;
+      }
+    }
+    .comment-form .form-buttons {
+      display: flex;
+      gap: 6px;
+    }
+    .comment-form button {
+      padding: 4px 12px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .comment-form .save-btn {
+      background: #2ea44f;
+      color: #fff;
+      border-color: #2ea44f;
+    }
+    .comment-form .cancel-btn {
+      background: transparent;
+    }
+    @media (prefers-color-scheme: dark) {
+      .comment-form .cancel-btn {
+        color: #e0e0e0;
+        border-color: #555;
+      }
+    }
+    .markdown-body {
+      margin-right: 370px;
+    }
+  </style>
+</head>
+<body>
+  <article class="markdown-body">
+    ${rawHtml}
+  </article>
+  <div class="comment-sidebar" id="sidebar">
+    <h3>Comments</h3>
+    <div id="comments-list"></div>
+  </div>
+  <script>${clientJs}</script>
+</body>
+</html>`);
+});
+
+app.get("/api/comments", (_req, res) => {
+  res.json(comments);
+});
+
+app.post("/api/comments", (req, res) => {
+  const comment = req.body;
+  comment.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  comments.push(comment);
+  writeCommentsFile();
+  res.json(comment);
+});
+
+app.delete("/api/comments/:id", (req, res) => {
+  comments = comments.filter((c) => c.id !== req.params.id);
+  writeCommentsFile();
+  res.json({ ok: true });
+});
+
+app.listen(port, () => {
+  console.log(`Markdown Commenter running at http://localhost:${port}`);
+  console.log(`Input:  ${inputFile}`);
+  console.log(`Output: ${outputFile}`);
+});

@@ -1,0 +1,11 @@
+{
+  "name": "markdown-commenter",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "mark-applier": "^0.5.2"
+  },
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}
