@@ -12,6 +12,7 @@ if (args.length < 2) {
 
 const inputFile = path.resolve(args[0]);
 const outputFile = path.resolve(args[1]);
+const inputDir = path.dirname(inputFile);
 const port = parseInt(args[2] || "3000", 10);
 
 if (!fs.existsSync(inputFile)) {
@@ -45,30 +46,18 @@ function parseCommentsFile(text) {
       Buffer.from(idMatch[1], "base64").toString("utf-8"),
     );
 
-    let comment;
-    const commentMarker = trimmed.indexOf("\nComment:\n");
-    if (commentMarker !== -1) {
-      comment = trimmed.slice(commentMarker + "\nComment:\n".length).trim();
-    } else {
-      // Legacy blockquote format
-      const commentLines = [];
-      let pastQuote = false;
-      for (const line of trimmed.split("\n")) {
-        if (line.startsWith("<!-- id:")) continue;
-        if (!pastQuote && line.startsWith("> ")) {
-          pastQuote = true;
-          continue;
-        }
-        if (pastQuote) {
-          commentLines.push(line);
-        }
-      }
-      comment = commentLines.join("\n").trim();
-    }
+    const contentMarker = trimmed.indexOf("\n## Selected Content:\n");
+    const commentMarker = trimmed.indexOf("\n## Comment:\n");
+    const selectedText = contentMarker !== -1 && commentMarker !== -1
+      ? trimmed.slice(contentMarker + "\n## Selected Content:\n".length, commentMarker)
+      : "";
+    const comment = commentMarker !== -1
+      ? trimmed.slice(commentMarker + "\n## Comment:\n".length).trim()
+      : "";
 
     results.push({
       id: data.id,
-      selectedText: data.selectedText,
+      selectedText,
       sourceLine: data.sourceLine ?? null,
       startPath: data.startPath,
       startOffset: data.startOffset,
@@ -85,7 +74,6 @@ function writeCommentsFile() {
     const data = Buffer.from(
       JSON.stringify({
         id: c.id,
-        selectedText: c.selectedText,
         sourceLine: c.sourceLine,
         startPath: c.startPath,
         startOffset: c.startOffset,
@@ -266,6 +254,15 @@ app.get("/", async (_req, res) => {
 </html>`);
 });
 
+app.use(express.static(inputDir));
+
+app.use((req, res, next) => {
+  if (req.method !== "GET") return next();
+  const absPath = decodeURIComponent(req.path);
+  if (!path.isAbsolute(absPath) || !fs.existsSync(absPath)) return next();
+  res.sendFile(absPath);
+});
+
 app.get("/api/comments", (_req, res) => {
   res.json(comments);
 });
@@ -284,8 +281,16 @@ app.delete("/api/comments/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Markdown Commenter running at http://localhost:${port}`);
   console.log(`Input:  ${inputFile}`);
   console.log(`Output: ${outputFile}`);
+});
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`Port ${port} is already in use.`);
+  } else {
+    console.error(err);
+  }
+  process.exit(1);
 });
