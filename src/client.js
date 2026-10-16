@@ -9,6 +9,10 @@
     while (current && current !== article) {
       const parent = current.parentNode;
       if (!parent) break;
+      if (parent.classList && parent.classList.contains("image-comment-wrapper")) {
+        current = parent;
+        continue;
+      }
       const siblings = Array.from(parent.childNodes);
       parts.unshift(siblings.indexOf(current));
       current = parent;
@@ -28,6 +32,11 @@
   }
 
   function applyHighlight(comment) {
+    if (comment.imageX != null) {
+      applyImagePin(comment);
+      return;
+    }
+
     const startNode = resolveNodePath(comment.startPath);
     const endNode = resolveNodePath(comment.endPath);
     if (!startNode || !endNode) return;
@@ -47,7 +56,44 @@
     }
   }
 
+  function ensureImageWrapper(img) {
+    if (img.parentElement.classList.contains("image-comment-wrapper")) {
+      return img.parentElement;
+    }
+    const wrapper = document.createElement("span");
+    wrapper.className = "image-comment-wrapper";
+    img.parentNode.insertBefore(wrapper, img);
+    wrapper.appendChild(img);
+    return wrapper;
+  }
+
+  function applyImagePin(comment) {
+    let imgNode = resolveNodePath(comment.startPath);
+    if (!imgNode) return;
+    if (imgNode.classList && imgNode.classList.contains("image-comment-wrapper")) {
+      imgNode = imgNode.querySelector("img");
+    }
+    if (!imgNode || imgNode.tagName !== "IMG") return;
+
+    const wrapper = ensureImageWrapper(imgNode);
+    const pin = document.createElement("span");
+    pin.className = "image-comment-pin";
+    pin.dataset.commentId = comment.id;
+    pin.title = comment.comment;
+    pin.style.left = comment.imageX + "%";
+    pin.style.top = comment.imageY + "%";
+    wrapper.appendChild(pin);
+  }
+
   function removeHighlight(id) {
+    const pin = article.querySelector(
+      `.image-comment-pin[data-comment-id="${id}"]`
+    );
+    if (pin) {
+      pin.remove();
+      return;
+    }
+
     const span = article.querySelector(
       `.comment-highlight[data-comment-id="${id}"]`
     );
@@ -87,11 +133,13 @@
 
       card.addEventListener("click", (e) => {
         if (e.target === deleteBtn) return;
-        const highlight = article.querySelector(
-          `.comment-highlight[data-comment-id="${c.id}"]`
+        const target = article.querySelector(
+          `.comment-highlight[data-comment-id="${c.id}"], .image-comment-pin[data-comment-id="${c.id}"]`
         );
-        if (highlight) {
-          highlight.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+          target.classList.add("flash");
+          setTimeout(() => target.classList.remove("flash"), 800);
         }
       });
 
@@ -106,7 +154,14 @@
     const res = await fetch("/api/comments");
     const comments = await res.json();
 
-    // Remove all existing highlights before re-applying
+    article.querySelectorAll(".image-comment-pin").forEach((pin) => pin.remove());
+    article.querySelectorAll(".image-comment-wrapper").forEach((wrapper) => {
+      const img = wrapper.querySelector("img");
+      if (img) {
+        wrapper.parentNode.insertBefore(img, wrapper);
+      }
+      wrapper.remove();
+    });
     article.querySelectorAll(".comment-highlight").forEach((span) => {
       const parent = span.parentNode;
       while (span.firstChild) {
@@ -168,6 +223,86 @@
           startOffset,
           endPath,
           endOffset,
+          comment,
+        }),
+      });
+      form.remove();
+      pendingForm = null;
+      await loadComments();
+    };
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "cancel-btn";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.onclick = () => {
+      form.remove();
+      pendingForm = null;
+    };
+
+    buttons.appendChild(saveBtn);
+    buttons.appendChild(cancelBtn);
+    form.appendChild(quoted);
+    form.appendChild(textarea);
+    form.appendChild(buttons);
+
+    commentsList.prepend(form);
+    textarea.focus();
+    pendingForm = form;
+  }
+
+  article.addEventListener("click", (e) => {
+    if (e.target.tagName !== "IMG") return;
+    const img = e.target;
+    const rect = img.getBoundingClientRect();
+    const imageX = ((e.clientX - rect.left) / rect.width) * 100;
+    const imageY = ((e.clientY - rect.top) / rect.height) * 100;
+    const imgSrc = img.getAttribute("src");
+    const sourceLine = getSourceLine(img);
+    const imgPath = getNodePath(img);
+
+    showImageCommentForm(imgSrc, imageX, imageY, sourceLine, imgPath);
+  });
+
+  function showImageCommentForm(imgSrc, imageX, imageY, sourceLine, imgPath) {
+    if (pendingForm) {
+      pendingForm.remove();
+      pendingForm = null;
+    }
+
+    const xPct = Math.round(imageX);
+    const yPct = Math.round(imageY);
+
+    const form = document.createElement("div");
+    form.className = "comment-form";
+
+    const quoted = document.createElement("div");
+    quoted.className = "quoted-text";
+    quoted.textContent = `Image: ${imgSrc} at (${xPct}%, ${yPct}%)`;
+
+    const textarea = document.createElement("textarea");
+    textarea.placeholder = "Leave a comment...";
+
+    const buttons = document.createElement("div");
+    buttons.className = "form-buttons";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "save-btn";
+    saveBtn.textContent = "Save";
+    saveBtn.onclick = async () => {
+      const comment = textarea.value.trim();
+      if (!comment) return;
+      await fetch("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedText: `Image: ${imgSrc} at (${xPct}%, ${yPct}%)`,
+          sourceLine,
+          startPath: imgPath,
+          startOffset: 0,
+          endPath: imgPath,
+          endOffset: 0,
+          imageX,
+          imageY,
           comment,
         }),
       });

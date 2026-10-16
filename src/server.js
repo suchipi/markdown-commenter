@@ -63,6 +63,8 @@ function parseCommentsFile(text) {
       startOffset: data.startOffset,
       endPath: data.endPath,
       endOffset: data.endOffset,
+      imageX: data.imageX ?? null,
+      imageY: data.imageY ?? null,
       comment,
     });
   }
@@ -79,6 +81,8 @@ function writeCommentsFile() {
         startOffset: c.startOffset,
         endPath: c.endPath,
         endOffset: c.endOffset,
+        imageX: c.imageX,
+        imageY: c.imageY,
       }),
     ).toString("base64");
     const lineLabel = c.sourceLine != null ? `\n\n# Line ${c.sourceLine}:` : "";
@@ -238,6 +242,28 @@ app.get("/", async (_req, res) => {
     }
     .markdown-body {
       margin-right: 370px;
+    }
+    .image-comment-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+    .image-comment-pin {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(255, 70, 70, 0.85);
+      border: 2px solid #fff;
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      z-index: 10;
+    }
+    .image-comment-pin:hover {
+      background: rgba(255, 30, 30, 1);
+    }
+    .image-comment-pin.flash {
+      background: rgba(0, 120, 255, 0.9);
     }
   </style>
 </head>
