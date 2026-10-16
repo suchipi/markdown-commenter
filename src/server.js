@@ -152,6 +152,10 @@ app.get("/", async (_req, res) => {
       margin-bottom: 10px;
       cursor: pointer;
     }
+    .comment-card.flash {
+      border-color: rgba(0, 120, 255, 0.9);
+      background: rgba(0, 120, 255, 0.1);
+    }
     @media (prefers-color-scheme: dark) {
       .comment-card {
         border-color: #444;

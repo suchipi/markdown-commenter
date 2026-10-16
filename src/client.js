@@ -82,6 +82,17 @@
     pin.title = comment.comment;
     pin.style.left = comment.imageX + "%";
     pin.style.top = comment.imageY + "%";
+    pin.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const card = commentsList.querySelector(
+        `.comment-card[data-comment-id="${comment.id}"]`
+      );
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.classList.add("flash");
+        setTimeout(() => card.classList.remove("flash"), 800);
+      }
+    });
     wrapper.appendChild(pin);
   }
 
