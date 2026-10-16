@@ -280,13 +280,13 @@ app.get("/", async (_req, res) => {
 </html>`);
 });
 
-app.use(express.static(inputDir));
+app.use(express.static(inputDir, { dotfiles: "allow" }));
 
 app.use((req, res, next) => {
   if (req.method !== "GET") return next();
   const absPath = decodeURIComponent(req.path);
   if (!path.isAbsolute(absPath) || !fs.existsSync(absPath)) return next();
-  res.sendFile(absPath);
+  res.sendFile(absPath, { dotfiles: "allow" });
 });
 
 app.get("/api/comments", (_req, res) => {
