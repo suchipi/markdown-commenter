@@ -2,8 +2,9 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "util";
-import { makeCss } from "mark-applier";
+import { makeCss, makePageHtml } from "mark-applier";
 import { markdownToHtmlWithLineNumbers } from "./render.js";
+import { cssReferences, htmlReferences } from "./referenced-files.js";
 
 const usage =
   "Usage: node src/server.js [--host <address>] <input.md> <comments-output.md> [port]";
@@ -36,6 +37,7 @@ if (!fs.existsSync(inputFile)) {
   console.error(`Input file not found: ${inputFile}`);
   process.exit(1);
 }
+const inputRealPath = fs.realpathSync.native(inputFile);
 
 let comments = [];
 if (fs.existsSync(outputFile)) {
@@ -108,11 +110,92 @@ function writeCommentsFile() {
   fs.writeFileSync(outputFile, sections.join("\n\n---\n\n") + "\n");
 }
 
-const app = express();
-app.use(express.json());
+const stateFile = outputFile + ".state.json";
+const serverUrl = `http://${urlHostFor(host)}:${port}`;
+const inputPage = { file: inputRealPath, kind: "markdown" };
+const refsByPage = new Map();
+let savedStateJson = null;
 
-app.get("/", async (_req, res) => {
-  const markdown = fs.readFileSync(inputFile, "utf-8");
+function loadVisitedPages() {
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+  } catch {
+    return new Set();
+  }
+  if (state?.version !== 1 || state.input !== inputRealPath) return new Set();
+  return new Set(Object.keys(state.pages ?? {}));
+}
+
+function saveState() {
+  const pages = {};
+  for (const [urlPath, page] of refsByPage) {
+    pages[urlPath] = {
+      file: page.file,
+      kind: page.kind,
+      refs: Object.fromEntries(page.refs),
+    };
+  }
+  const json =
+    JSON.stringify({ version: 1, input: inputRealPath, pages }, null, 2) + "\n";
+  if (json === savedStateJson) return;
+  const existed = fs.existsSync(stateFile);
+  fs.writeFileSync(stateFile, json);
+  savedStateJson = json;
+  if (!existed) console.log(`Created link state file: ${stateFile}`);
+}
+
+async function renderPage(urlPath, target) {
+  const text = fs.readFileSync(target.file, "utf-8");
+  if (target.kind === "css") {
+    return { type: "css", body: text, refs: cssReferences(text, urlPath, inputDir) };
+  }
+  let body = text;
+  if (target.file === inputRealPath) {
+    body = await renderCommentingPage(text);
+  } else if (target.kind === "markdown") {
+    body = await makePageHtml(text, { origin: serverUrl });
+  }
+  return { type: "html", body, refs: htmlReferences(body, urlPath, inputDir) };
+}
+
+async function renderAndRecord(urlPath, target) {
+  const page = await renderPage(urlPath, target);
+  refsByPage.set(urlPath, { ...target, refs: page.refs });
+  saveState();
+  return page;
+}
+
+function findTarget(urlPath) {
+  for (const page of refsByPage.values()) {
+    const target = page.refs.get(urlPath);
+    if (target) return target;
+  }
+  return null;
+}
+
+async function crawlVisitedPages() {
+  const visited = loadVisitedPages();
+  const queue = [["/", inputPage]];
+  while (queue.length > 0) {
+    const [urlPath, target] = queue.shift();
+    if (refsByPage.has(urlPath)) continue;
+    let refs;
+    try {
+      ({ refs } = await renderPage(urlPath, target));
+    } catch (err) {
+      console.warn(`Couldn't render ${urlPath} at startup: ${err.message}`);
+      continue;
+    }
+    refsByPage.set(urlPath, { ...target, refs });
+    for (const [refPath, refTarget] of refs) {
+      const isPage = refTarget.kind !== "file" && refTarget.file !== inputRealPath;
+      if (isPage && visited.has(refPath)) queue.push([refPath, refTarget]);
+    }
+  }
+}
+
+async function renderCommentingPage(markdown) {
   const rawHtml = await markdownToHtmlWithLineNumbers(markdown);
   const css = makeCss("auto");
   const clientJs = fs.readFileSync(
@@ -120,7 +203,7 @@ app.get("/", async (_req, res) => {
     "utf-8",
   );
 
-  res.type("html").send(`<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -298,16 +381,15 @@ app.get("/", async (_req, res) => {
   </div>
   <script>${clientJs}</script>
 </body>
-</html>`);
-});
+</html>`;
+}
 
-app.use(express.static(inputDir, { dotfiles: "allow" }));
+const app = express();
+app.use(express.json());
 
-app.use((req, res, next) => {
-  if (req.method !== "GET") return next();
-  const absPath = decodeURIComponent(req.path);
-  if (!path.isAbsolute(absPath) || !fs.existsSync(absPath)) return next();
-  res.sendFile(absPath, { dotfiles: "allow" });
+app.get("/", async (_req, res) => {
+  const page = await renderAndRecord("/", inputPage);
+  res.type("html").send(page.body);
 });
 
 app.get("/api/comments", (_req, res) => {
@@ -328,6 +410,24 @@ app.delete("/api/comments/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+app.use(async (req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  const target = findTarget(req.path);
+  if (!target) return next();
+  if (target.kind === "file") {
+    res.sendFile(target.file, { dotfiles: "allow" }, (err) => {
+      if (err && !res.headersSent) next();
+    });
+    return;
+  }
+  if (target.file === inputRealPath) return res.redirect("/");
+  const page = await renderAndRecord(req.path, target);
+  res.type(page.type).send(page.body);
+});
+
+await crawlVisitedPages();
+saveState();
+
 function urlHostFor(address) {
   // The unspecified addresses aren't meant to be connected to; localhost reaches either.
   if (address === "0.0.0.0" || address === "::") return "localhost";
@@ -335,9 +435,7 @@ function urlHostFor(address) {
 }
 
 const server = app.listen(port, host, () => {
-  console.log(
-    `Markdown Commenter running at http://${urlHostFor(host)}:${port}`,
-  );
+  console.log(`Markdown Commenter running at ${serverUrl}`);
   console.log(`Input:  ${inputFile}`);
   console.log(`Output: ${outputFile}`);
 });
