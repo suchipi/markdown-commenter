@@ -1,6 +1,7 @@
 {
   "name": "markdown-commenter",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "devDependencies": {
     "mark-applier": "^0.5.2"
