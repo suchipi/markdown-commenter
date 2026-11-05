@@ -1,12 +1,28 @@
 import express from "express";
 import fs from "fs";
 import path from "path";
+import { parseArgs } from "util";
 import { makeCss } from "mark-applier";
 import { markdownToHtmlWithLineNumbers } from "./render.js";
 
-const args = process.argv.slice(2);
+const usage =
+  "Usage: node src/server.js [--host <address>] <input.md> <comments-output.md> [port]";
+
+let cli;
+try {
+  cli = parseArgs({
+    allowPositionals: true,
+    options: { host: { type: "string", default: "127.0.0.1" } },
+  });
+} catch (err) {
+  console.error(err.message);
+  console.error(usage);
+  process.exit(1);
+}
+
+const args = cli.positionals;
 if (args.length < 2) {
-  console.error("Usage: node src/server.js <input.md> <comments-output.md>");
+  console.error(usage);
   process.exit(1);
 }
 
@@ -14,6 +30,7 @@ const inputFile = path.resolve(args[0]);
 const outputFile = path.resolve(args[1]);
 const inputDir = path.dirname(inputFile);
 const port = parseInt(args[2] || "3000", 10);
+const host = cli.values.host;
 
 if (!fs.existsSync(inputFile)) {
   console.error(`Input file not found: ${inputFile}`);
@@ -311,8 +328,16 @@ app.delete("/api/comments/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-const server = app.listen(port, () => {
-  console.log(`Markdown Commenter running at http://localhost:${port}`);
+function urlHostFor(address) {
+  // The unspecified addresses aren't meant to be connected to; localhost reaches either.
+  if (address === "0.0.0.0" || address === "::") return "localhost";
+  return address.includes(":") ? `[${address}]` : address;
+}
+
+const server = app.listen(port, host, () => {
+  console.log(
+    `Markdown Commenter running at http://${urlHostFor(host)}:${port}`,
+  );
   console.log(`Input:  ${inputFile}`);
   console.log(`Output: ${outputFile}`);
 });

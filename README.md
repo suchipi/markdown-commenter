@@ -15,7 +15,7 @@ npm install
 ## Usage
 
 ```sh
-node src/server.js <input.md> <comments-output.md> [port]
+node src/server.js [--host <address>] <input.md> <comments-output.md> [port]
 ```
 
 | Argument             | Description                                                                         |
@@ -23,8 +23,9 @@ node src/server.js <input.md> <comments-output.md> [port]
 | `input.md`           | The Markdown file to review. It is never modified.                                  |
 | `comments-output.md` | Where comments get saved. If it already exists, its comments are loaded on startup. Anything else in it is overwritten on the first save. |
 | `port`               | Port to listen on. Defaults to `3000`.                                              |
+| `--host <address>`   | Address to listen on. Defaults to `127.0.0.1`, so only this machine can connect. Use `0.0.0.0` to listen on all IPv4 interfaces, or `::` for all IPv4 and IPv6 interfaces. |
 
-Then open `http://localhost:3000`.
+Then open `http://127.0.0.1:3000`.
 
 To try it out on the included test documents:
 
@@ -78,4 +79,4 @@ The file is only read at startup. While the server is running it holds comments 
 
 ## Security
 
-This is meant for local use only. The server listens on all network interfaces and will serve any file your user can read when it's requested by absolute path (for example, `http://localhost:3000/etc/hosts`). Don't run it on a network you don't trust.
+This is meant for local use only. The server will serve any file your user can read when it's requested by absolute path (for example, `http://127.0.0.1:3000/etc/hosts`). By default it only listens on `127.0.0.1`, so other machines can't reach it. If you use `--host` to listen on another interface (such as `0.0.0.0`), anyone who can reach that interface can read those files, so don't do that on a network you don't trust.
